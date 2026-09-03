@@ -8,13 +8,7 @@ import (
 	"time"
 )
 
-type Quiz struct {
-	total     int
-	score     int
-	questions []Question
-}
-
-type Question struct {
+type question struct {
 	question string
 	answer   string
 }
@@ -22,73 +16,81 @@ type Question struct {
 func main() {
 	filename := flag.String("file", "problems.csv", "file to read")
 	timeInSeconds := flag.Int("time", 60, "time in seconds")
+	flag.Parse()
 
 	fmt.Println("Welcome to the Quiz!")
 
-	file, err := os.Open(*filename)
+	questions, err := loadQuestions(*filename)
 	if err != nil {
-		panic(err)
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
+
+	score := runQuizWithTimer(questions, time.Duration(*timeInSeconds)*time.Second)
+
+	fmt.Printf("You scored: %d point(s) out of %d!\n", score, len(questions))
+}
+
+func loadQuestions(filename string) ([]question, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
 	}
 	defer file.Close()
 
-	quiz := getQuiz(csv.NewReader(file))
-
-	runQuizWithTimer(quiz, *timeInSeconds)
-
-	fmt.Printf("You scored: %v point(s) out of %v!\n", quiz.score, quiz.total)
-}
-
-func getFileName() string {
-	filename := "problems.csv"
-	if len(os.Args) > 2 && os.Args[1] == "-file" {
-		filename = os.Args[2]
-	}
-	return filename
-}
-
-func getQuiz(reader *csv.Reader) *Quiz {
-	records, err := reader.ReadAll()
+	records, err := csv.NewReader(file).ReadAll()
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	quiz := &Quiz{
-		total:     len(records),
-		score:     0,
-		questions: make([]Question, len(records)),
-	}
+
+	questions := make([]question, 0, len(records))
 
 	for i, record := range records {
-		quiz.questions[i] = Question{
+		if len(record) < 2 {
+			return nil, fmt.Errorf("invalid record on line %d", i+1)
+		}
+
+		questions = append(questions, question{
 			question: record[0],
 			answer:   record[1],
-		}
+		})
 	}
-	return quiz
+
+	return questions, nil
 }
 
-func runQuiz(quiz *Quiz) {
-	for _, question := range quiz.questions {
-		fmt.Println("Question: ", question.question)
-		var input string
-		fmt.Scanln(&input)
+func runQuiz(questions []question, score chan<- int) {
+	correct := 0
 
-		if question.answer == input {
-			quiz.score++
+	for _, q := range questions {
+		fmt.Printf("Question: %s\n", q.question)
+
+		var answer string
+		fmt.Scanln(&answer)
+
+		if answer == q.answer {
+			correct++
 		}
 	}
+
+	score <- correct
 }
 
-func runQuizWithTimer(quiz *Quiz, timeInSeconds int) {
+func runQuizWithTimer(questions []question, limit time.Duration) int {
 
-	done := make(chan bool, 1)
-	go func() {
-		runQuiz(quiz)
-		done <- true
-	}()
+	score := make(chan int, 1)
+
+	go runQuiz(questions, score)
+
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
+
 	select {
-	case <-done:
+	case score := <-score:
 		fmt.Println("Quiz finished!")
-	case <-time.After(time.Duration(timeInSeconds) * time.Second):
+		return score
+	case <-timer.C:
 		fmt.Println("Time is up!")
+		return 0
 	}
 }
